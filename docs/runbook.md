@@ -19,6 +19,7 @@ Design rationale is in [`docs/adr/`](adr/).
 |---|---|---|
 | `EMBED_BUNDLE_DIR` | `/models/current` | bundle to serve |
 | `EMBED_INTRA_OP_THREADS` | `0` (ORT default: all cores) | set to the container's CPU allotment |
+| `EMBED_EXECUTION_TARGET` | `cpu` | `cpu`, `coreml` or `cuda`; startup fails if the provider isn't in the onnxruntime build (ADR 0006) |
 | `EMBED_MAX_BATCH_SIZE` | `32` | texts per model call |
 | `EMBED_MAX_BATCH_TOKENS` | `8192` | padded tokens per model call (batch × longest) |
 | `EMBED_MAX_WAIT_MS` | `0` | extra wait for batch company; see ADR 0004 before raising |
@@ -106,7 +107,8 @@ Under an int8 bundle, tiny differences (cosine ≥ 0.9999) between cached and fr
 
 ## Deploy and roll back
 
-1. Build a bundle: `python -m minilm_onnx.package --model <hf-id|dir> --variant int8`. It exits
+1. Build a bundle: `python -m minilm_onnx.package --model <hf-id|dir>` (fp32; int8 is opt-in, see
+   ADR 0003). It exits
    non-zero, writing nothing, if the parity gate fails.
 2. Build the image with that bundle (`docker build --build-arg BUNDLE=bundles/<name> ...`), tagged with
    the bundle version.
@@ -131,11 +133,20 @@ Kubernetes, add a `preStop` sleep (5–10 s) so endpoints are removed before the
 listening, and set `terminationGracePeriodSeconds` ≥ preStop + 2 × `EMBED_DRAIN_TIMEOUT_S`
 (default: 10 + 40 = 50 s).
 
+## Performance regressions
+
+The CI `perf` job (ADR 0007) fails when ONNX Runtime's speedup over PyTorch drops more than 20% below
+the recent median for that runner class, falls under a floor in `perf/floors.json`, or fidelity
+regresses. Its job summary shows the current vs baseline speedup per shape; the full record and
+trend chart live on the `perf-history` branch. To investigate, re-run the same shapes locally with
+`python tools/perf_gate.py --model <id> --history /tmp/h.jsonl` on the parent and the failing commit.
+If a change is an accepted trade-off, lower the floor in the same PR and say why.
+
 ## Capacity planning
 
 Measure on your own hardware with `tools/run_loadtest.sh <bundle>`. The load generator must run on
 separate cores, or it steals CPU and skews results. Use its aiohttp client: httpx's pool becomes
 the bottleneck at 64 connections (`results/serving/client_comparison.md`). On the reference stand-in
-(int8, one pinned vCPU, single-text requests, median of 3 runs) one core sustained 222 req/s at
+(int8 stand-in bundle, one pinned vCPU, single-text requests, median of 3 runs) one core sustained 222 req/s at
 p99 123 ms with 16 concurrent clients, and 220 req/s at p99 482 ms with 64. For a latency SLO, size
 replicas from the concurrency level where p99 still meets it, not from peak throughput.

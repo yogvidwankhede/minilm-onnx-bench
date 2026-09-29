@@ -136,7 +136,7 @@ def draw(p: dict) -> str:
     mid = ry + rh / 2
     s.node(44, ry, 180, rh, "PyTorch checkpoint", "fine-tuned MiniLM-L6")
     s.node(260, ry, 196, rh, "ONNX export", "mean pool + L2 norm in graph")
-    s.node(492, ry, 170, rh, "int8 quantization", "dynamic, MatMul / Gemm")
+    s.node(492, ry, 170, rh, "int8 (opt-in)", "fp32 is the default")
     s.node(698, ry, 186, rh, "Parity gate", "vs PyTorch, same tokenizer", kind="accent")
     for x0, x1 in ((224, 260), (456, 492), (662, 698)):
         s.path([(x0, mid), (x1 - 2, mid)], L, "a")
@@ -195,7 +195,7 @@ def draw(p: dict) -> str:
         ("Tokenizer", 128, "Rust, shared code", "plain"),
         ("Bounded queue", 146, "backpressure", "plain"),
         ("Dynamic batcher", 184, "length-sorted batches", "accent"),
-        ("ONNX Runtime", 146, "worker thread", "plain"),
+        ("ONNX Runtime", 146, "CPU · CoreML · CUDA", "plain"),
     )
     gap, x, row = 26, 230, []
     for title, w, sub, kind in widths:

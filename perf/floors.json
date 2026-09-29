@@ -1,0 +1,4 @@
+{
+  "_comment": "Minimum acceptable ONNX Runtime speedup vs PyTorch per shape, by hardware class (tools/perf_gate.py). Catches slow drift that a rolling median would absorb. 'default' applies when no class-specific entry exists. Set conservatively below every measured run: sandbox x86 (2.2-2.5x) and Apple M4 Max (2.0x) at b1_s32; tighten per class once perf-history has enough CI runs. Larger shapes have no floor yet: on Apple Silicon ONNX Runtime CPU is slower than PyTorch there (0.72-0.82x), so a single cross-hardware floor would be wrong.",
+  "default": {"b1_s32": 1.3}
+}

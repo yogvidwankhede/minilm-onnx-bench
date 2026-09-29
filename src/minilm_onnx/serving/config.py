@@ -43,6 +43,7 @@ class Settings:
     max_body_bytes: int = 8 * 1024 * 1024  # checked before JSON parsing (413 above, 411 if unsized)
     # compute
     intra_op_threads: int = 0  # 0 = ORT default (all physical cores)
+    execution_target: str = "cpu"  # cpu | coreml | cuda (see serving/providers.py)
     cache_size: int = 10000  # LRU embeddings keyed by text hash; 0 disables
     warmup_iters: int = 3
     drain_timeout_s: float = 20.0

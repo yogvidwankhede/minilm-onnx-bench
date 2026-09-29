@@ -1,44 +1,63 @@
-# ADR 0003: int8 dynamic quantization, with its batch-dependence stated
+# ADR 0003: fp32 by default; int8 only as a searched, gated opt-in
 
-**Status:** accepted for the stand-in; **must be re-confirmed on the fine-tuned weights** · 2026-09-29
+**Status:** accepted · 2026-09-29 (revised after the first real-weights run)
 
 ## Context
 
-Dynamic int8 quantization (MatMul/Gemm weights stored as int8, activation scales computed on the fly)
-needs no calibration data and is the standard first optimization for transformer encoders on CPU.
+Dynamic int8 quantization stores MatMul weights as int8 and quantizes activations on the fly. It
+needs no calibration data and is the usual first optimization for transformer encoders on CPU. The
+first version of this project shipped int8 by default. All of its evidence came from a
+random-weight stand-in, which cannot show the one thing that matters here: whether quantization
+preserves *this model's* retrieval behavior.
 
-## Measurements (same-architecture stand-in)
+## What the fine-tuned weights showed
 
-- **Speed:** 1.96x–4.73x PyTorch eager across the offline benchmark grid
-  (`results/standin/results.md`). That machine's CPU supports AVX-512 VNNI, the instruction set
-  that accelerates int8 dot products. **On CPUs without VNNI, expect smaller int8 gains**; re-run
-  `make bench` there before choosing int8.
-- **Size:** 58.5 MB vs 90.3 MB. Only 35% smaller, because the 30,522 × 384 token-embedding table
-  (~47 MB) is a Gather, not a MatMul, so it stays fp32.
-- **Fidelity:** worst per-sentence cosine to fp32 PyTorch of about 0.99995, recorded in each
-  bundle's `manifest.json` under `parity`.
-- **Batch dependence:** activation scales are computed per model call, so a text's int8 vector depends
-  slightly on which other texts share its batch. Measured with `tools/batch_drift.py` on the 55 golden
-  texts, each embedded alone and then inside mixed-length batches (`results/serving/batch_drift.json`):
+Measured on the real model with `tools/quant_search.py` (Apple M4 Max, 4 CPU threads;
+`results/healthmate/quant_search.json`). "Speed" is relative to fp32 ONNX Runtime on the same
+machine.
 
-  | Variant | worst cosine (alone vs batched) | max abs coordinate difference |
-  |---|---:|---:|
-  | fp32 | 0.9999994 | 4.5e-08 |
-  | int8 | 0.9999825 | 1.0e-03 |
+| int8 config | Gate | Worst cosine | Top-1 | Size | Speed b1·s32 | Speed b32·s128 |
+|---|---|---:|---:|---:|---:|---:|
+| per-tensor (ORT default) | **FAIL** | 0.9594 | 0.80 | 58.6 MB | 0.92x | 0.95x |
+| weights only | **FAIL** | 0.9605 | 0.80 | 58.6 MB | 0.90x | 0.93x |
+| weights only + per-channel | **FAIL** | 0.9986 | 0.87 | 58.7 MB | 0.90x | 0.93x |
+| weights only, FFN down-proj in fp32 | PASS | 0.9975 | 1.00 | 69.2 MB | 0.98x | 1.02x |
+| weights only, attention projections only | PASS | 0.9988 | 1.00 | 79.8 MB | 0.98x | 0.95x |
+| weights only, last 2 layers in fp32 | **FAIL** | 0.9642 | 0.80 | 69.2 MB | 0.95x | 0.85x |
+
+Three findings:
+
+1. **Plain int8 breaks this model.** The release gate refused it: worst cosine 0.96, and 3 of 15
+   queries changed their top document. Trained transformers develop activation outliers that one
+   int8 scale can't represent; the FFN down-projections are the usual site, and keeping them in fp32
+   fixed fidelity here. The random-weight
+   stand-in passed the same gate at cosine 0.99995, which is why stand-in results were never
+   allowed to stand in for fidelity.
+2. **Keeping outlier-heavy MatMuls in fp32 fixes fidelity.** The two passing configs keep either the
+   FFN down-projections or all FFN layers in fp32.
+3. **On Apple Silicon, no int8 config was faster than fp32.** ARM lacks the x86 VNNI int8
+   dot-product instructions, and ORT's fp32 path is already fast there. On the x86 sandbox, whose
+   CPU has VNNI, the fully quantized configs were 1.47–1.84x faster than fp32 ONNX, and the configs
+   that keep layers in fp32 kept part of that gain (1.04–1.53x)
+   (`results/standin/quant_search_x86.json`, stand-in weights). So the trade-off is
+   hardware-specific.
+
+The retrieval check uses a 15-query × 40-document set, so one flipped near-tie moves top-1 by
+0.07. That is why per-channel (cosine 0.9986) fails while FFN-in-fp32 (cosine 0.9975) passes. A
+larger labeled query set would sharpen the gate; it is the obvious next investment.
 
 ## Decision
 
-int8 is the default packaging variant, conditional on passing the release gate, whose retrieval
-check applies to real weights. fp32 remains one flag away (`--variant fp32`).
+- **fp32 is the default bundle variant.** It passes with max |Δ| 1.9e-07, and on the one
+  real-hardware target measured, int8 buys nothing.
+- **int8 is opt-in:** `--variant int8 --quant <config>`, defaulting to the attention-only config
+  that passed. It must still pass the gate on the target weights, and its speed must be re-measured
+  on the target CPU (`tools/target_bench.py`) before it ships.
 
 ## Consequences
 
-- Under int8, the same text can come back with slightly different vectors: from the cache vs
-  computed, or at different load levels. At cosine ≥ 0.99998 this is far below retrieval noise, but it
-  rules out bit-exact equality checks on vectors.
-  `test_int8_is_only_approximately_batch_invariant` asserts both that the drift exists and that it
-  stays above cosine 0.9999. `test_concurrent_requests_keep_order_and_fp32_is_batch_invariant` holds
-  fp32 to 1e-5.
-- If an application needs bit-reproducible vectors, serve fp32.
-- Static quantization, or quantizing the embedding table, could shrink the model further. Either one
-  must pass the same gate.
+- Bundles are about 90 MB instead of 59 MB.
+- The batch-dependence of dynamic int8 (a text's vector shifts slightly with its batch companions;
+  worst cosine 0.99998 on the stand-in, `results/serving/batch_drift.json`) only applies to int8
+  bundles. fp32 is batch-invariant to 4.5e-08.
+- Static (calibrated) quantization, or a larger evaluation set, are the paths to revisit int8.

@@ -1,6 +1,10 @@
 """Build a deployable model bundle, gated on parity with PyTorch.
 
-    python -m minilm_onnx.package --model <hf-id|dir|standin> --variant int8 --out bundles/
+    python -m minilm_onnx.package --model <hf-id|dir|standin> [--variant fp32|int8] [--quant CONFIG]
+
+fp32 is the default. int8 is opt-in: on the fine-tuned weights plain dynamic
+int8 fails this gate, and on Apple Silicon no int8 config was faster than
+fp32 (ADR 0003). --quant picks the int8 config (tools/quant_search.py).
 
 Nothing is written unless the chosen variant passes its parity gate through
 the real serving path (TextEncoder -> ONNX Runtime) against PyTorch on the
@@ -27,11 +31,13 @@ import transformers
 from . import export, parity
 from .corpus import DOCS, QUERIES
 from .model import DEFAULT_MODEL_ID, MAX_SEQ_LENGTH, SentenceEmbedder, build_standin_embedder, load_embedder
+from .quant import QUANT_CONFIGS, quantize
 from .runtimes import OrtRunner, TorchRunner
 from .serving.bundle import FILES, MANIFEST_SCHEMA, bundle_version, sha256_file
 from .serving.tokenize import TextEncoder, pad_batch
 
 VARIANT_FILES = {"fp32": "model.onnx", "int8": "model.int8.onnx"}
+DEFAULT_QUANT = "weights_only+attention_only"  # passed the gate on the fine-tuned weights
 VARIANT_TOLERANCE_KEY = {"fp32": "onnx_fp32", "int8": "onnx_int8"}
 # Serving must reproduce the bundle's own build-time ONNX output almost exactly.
 # Headroom covers int8's batch-composition drift (~2e-5 in cosine, ADR 0003).
@@ -89,6 +95,7 @@ def build_bundle(
     threads: int = 2,
     log=print,
     model: SentenceEmbedder | None = None,
+    quant: str = DEFAULT_QUANT,
 ) -> Path:
     """`model` overrides loading (tests pass a tiny stand-in); `model_id` must then be 'standin'."""
     if variant not in VARIANT_FILES:
@@ -111,8 +118,9 @@ def build_bundle(
 
         log(f"[2/4] exporting ({variant})")
         work = staging / "_export"
-        paths = export.export_all(model, work, int8=(variant == "int8"), fused=False)
-        src = paths["onnx_int8" if variant == "int8" else "onnx_fp32"]
+        src = export.export_fp32(model, work / "model.onnx")
+        if variant == "int8":
+            src = quantize(src, work / "model.int8.onnx", quant)
         shutil.copyfile(src, staging / "model.onnx")
         shutil.rmtree(work)
 
@@ -159,6 +167,7 @@ def build_bundle(
             "source_model": model_id,
             "weights": "random-init stand-in (same architecture)" if standin else "fine-tuned",
             "variant": variant,
+            "quant_config": quant if variant == "int8" else None,
             "embedding_dim": dim,
             "max_seq_length": MAX_SEQ_LENGTH,
             "opset": 17,
@@ -196,12 +205,13 @@ def build_bundle(
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default=DEFAULT_MODEL_ID, help="HF id, local dir, or 'standin'")
-    ap.add_argument("--variant", choices=sorted(VARIANT_FILES), default="int8")
+    ap.add_argument("--variant", choices=sorted(VARIANT_FILES), default="fp32")
+    ap.add_argument("--quant", choices=sorted(QUANT_CONFIGS), default=DEFAULT_QUANT, help="int8 config")
     ap.add_argument("--out", default="bundles")
     ap.add_argument("--name", default="healthmate-minilm")
     args = ap.parse_args(argv)
     try:
-        build_bundle(args.model, args.variant, Path(args.out), args.name)
+        build_bundle(args.model, args.variant, Path(args.out), args.name, quant=args.quant)
     except GateFailed as exc:
         print(f"ERROR: {exc}")
         return 2

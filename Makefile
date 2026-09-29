@@ -1,5 +1,5 @@
 MODEL ?= yogvidwankhede/healthmate-minilm-l6-v2-medical-3fold
-VARIANT ?= int8
+VARIANT ?= fp32
 THREADS ?= 2
 BUNDLE ?= $(firstword $(wildcard bundles/*-$(VARIANT)-*))
 

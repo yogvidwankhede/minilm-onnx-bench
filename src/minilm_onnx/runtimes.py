@@ -9,25 +9,37 @@ import onnxruntime as ort
 import torch
 
 from .model import SentenceEmbedder
+from .serving.providers import providers_for
 
 Batch = dict[str, np.ndarray]  # input_ids / attention_mask / token_type_ids, int64
 
 
+def torch_devices() -> list[str]:
+    """PyTorch devices usable on this machine, CPU first."""
+    out = ["cpu"]
+    if torch.cuda.is_available():
+        out.append("cuda")
+    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        out.append("mps")
+    return out
+
+
 class TorchRunner:
-    def __init__(self, model: SentenceEmbedder, threads: int):
-        self.name = "pytorch_fp32"
-        self.model = model.eval()
+    def __init__(self, model: SentenceEmbedder, threads: int, device: str = "cpu", name: str | None = None):
+        self.name = name or ("pytorch_fp32" if device == "cpu" else f"pytorch_{device}")
+        self.device = torch.device(device)
+        self.model = model.eval().to(self.device) if device != "cpu" else model.eval()
         self.threads = threads
 
     def __call__(self, batch: Batch) -> np.ndarray:
         torch.set_num_threads(self.threads)
         with torch.inference_mode():
-            out = self.model(**{k: torch.from_numpy(v) for k, v in batch.items()})
-        return out.numpy()
+            out = self.model(**{k: torch.from_numpy(v).to(self.device) for k, v in batch.items()})
+        return out.cpu().numpy()  # .cpu() also synchronizes GPU work, so timings are honest
 
 
 class OrtRunner:
-    def __init__(self, path: Path, name: str, threads: int, optimize: bool = True):
+    def __init__(self, path: Path, name: str, threads: int, optimize: bool = True, target: str = "cpu"):
         self.name = name
         so = ort.SessionOptions()
         so.intra_op_num_threads = threads
@@ -36,7 +48,7 @@ class OrtRunner:
         so.graph_optimization_level = (
             ort.GraphOptimizationLevel.ORT_ENABLE_ALL if optimize else ort.GraphOptimizationLevel.ORT_DISABLE_ALL
         )
-        self.sess = ort.InferenceSession(str(path), so, providers=["CPUExecutionProvider"])
+        self.sess = ort.InferenceSession(str(path), so, providers=providers_for(target))
         self.input_names = {i.name for i in self.sess.get_inputs()}
 
     def __call__(self, batch: Batch) -> np.ndarray:

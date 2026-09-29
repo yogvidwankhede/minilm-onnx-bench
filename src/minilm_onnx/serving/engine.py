@@ -45,6 +45,7 @@ import onnxruntime as ort
 from .bundle import BundleError, Manifest, load_golden, load_manifest
 from .config import Settings
 from .metrics import Metrics
+from .providers import providers_for
 from .tokenize import TextEncoder, pad_batch
 
 log = logging.getLogger("embed.engine")
@@ -130,7 +131,9 @@ class Engine:
         so.inter_op_num_threads = 1
         if settings.intra_op_threads > 0:
             so.intra_op_num_threads = settings.intra_op_threads
-        self.session = ort.InferenceSession(str(bundle / "model.onnx"), so, providers=["CPUExecutionProvider"])
+        self.session = ort.InferenceSession(
+            str(bundle / "model.onnx"), so, providers=providers_for(settings.execution_target)
+        )
         self._inputs = {i.name for i in self.session.get_inputs()}
         dim = self.session.get_outputs()[0].shape[-1]
         if isinstance(dim, int) and dim != self.manifest.embedding_dim:

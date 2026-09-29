@@ -1,0 +1,128 @@
+{
+  "model": "standin",
+  "threads": 2,
+  "onnx_fp32_latency_ms": {
+    "b1_s32": 7.006953999734833,
+    "b32_s128": 667.6980134998303
+  },
+  "gate": {
+    "max_abs": null,
+    "min_cos": 0.98,
+    "min_top1": 0.9
+  },
+  "configs": [
+    {
+      "config": "per_tensor",
+      "gate": "PASS",
+      "min_cosine": 0.9999505544984129,
+      "top1_agreement": 0.9333333333333333,
+      "top5_overlap": 1.0,
+      "size_mb": 58.52,
+      "speedup_vs_onnx_fp32": {
+        "b1_s32": 1.465424118975438,
+        "b32_s128": 1.566040217405916
+      },
+      "latency_ms": {
+        "b1_s32": 4.781519499374554,
+        "b32_s128": 426.3607064995085
+      }
+    },
+    {
+      "config": "weights_only",
+      "gate": "PASS",
+      "min_cosine": 0.9999543832769987,
+      "top1_agreement": 1.0,
+      "top5_overlap": 1.0,
+      "size_mb": 58.5,
+      "speedup_vs_onnx_fp32": {
+        "b1_s32": 1.6171943949220626,
+        "b32_s128": 1.7866684605485734
+      },
+      "latency_ms": {
+        "b1_s32": 4.332784000325773,
+        "b32_s128": 373.7111994996667
+      }
+    },
+    {
+      "config": "weights_only+per_channel",
+      "gate": "PASS",
+      "min_cosine": 0.9999729522051762,
+      "top1_agreement": 1.0,
+      "top5_overlap": 1.0,
+      "size_mb": 58.6,
+      "speedup_vs_onnx_fp32": {
+        "b1_s32": 1.5026121648973443,
+        "b32_s128": 1.8416383478062368
+      },
+      "latency_ms": {
+        "b1_s32": 4.663181999603694,
+        "b32_s128": 362.55653250009345
+      }
+    },
+    {
+      "config": "weights_only+skip_ffn_out",
+      "gate": "PASS",
+      "min_cosine": 0.999966460665048,
+      "top1_agreement": 1.0,
+      "top5_overlap": 1.0,
+      "size_mb": 69.1,
+      "speedup_vs_onnx_fp32": {
+        "b1_s32": 1.2660230568626278,
+        "b32_s128": 1.5255100138490587
+      },
+      "latency_ms": {
+        "b1_s32": 5.534618000638147,
+        "b32_s128": 437.6883844997792
+      }
+    },
+    {
+      "config": "weights_only+per_channel+skip_ffn_out",
+      "gate": "PASS",
+      "min_cosine": 0.9999817168289589,
+      "top1_agreement": 1.0,
+      "top5_overlap": 1.0,
+      "size_mb": 69.2,
+      "speedup_vs_onnx_fp32": {
+        "b1_s32": 1.408499638523095,
+        "b32_s128": 1.4933444501639812
+      },
+      "latency_ms": {
+        "b1_s32": 4.974764499820594,
+        "b32_s128": 447.1158770011243
+      }
+    },
+    {
+      "config": "weights_only+attention_only",
+      "gate": "PASS",
+      "min_cosine": 0.9999801738593512,
+      "top1_agreement": 1.0,
+      "top5_overlap": 1.0,
+      "size_mb": 79.71,
+      "speedup_vs_onnx_fp32": {
+        "b1_s32": 1.0372273357191104,
+        "b32_s128": 1.1365036173086294
+      },
+      "latency_ms": {
+        "b1_s32": 6.755465999049193,
+        "b32_s128": 587.5018814995201
+      }
+    },
+    {
+      "config": "weights_only+skip_last_2",
+      "gate": "PASS",
+      "min_cosine": 0.999965653811422,
+      "top1_agreement": 1.0,
+      "top5_overlap": 0.9866666666666667,
+      "size_mb": 69.1,
+      "speedup_vs_onnx_fp32": {
+        "b1_s32": 1.2930828287116325,
+        "b32_s128": 1.4744059772437481
+      },
+      "latency_ms": {
+        "b1_s32": 5.418797500169603,
+        "b32_s128": 452.8589980000106
+      }
+    }
+  ],
+  "recommended": "weights_only"
+}

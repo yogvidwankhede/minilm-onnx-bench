@@ -22,7 +22,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-MANIFEST_SCHEMA = 2
+MANIFEST_SCHEMA = 3
 FILES = ("model.onnx", "tokenizer.json", "golden.json")
 
 
@@ -50,6 +50,7 @@ class Manifest:
     opset: int
     golden_min_cosine: float  # vs PyTorch reference (parity tolerance for the variant)
     golden_onnx_min_cosine: float  # vs this bundle's own build-time ONNX output
+    quant_config: str | None  # int8 config (src/minilm_onnx/quant.py); None for fp32
     sha256: dict
     parity: dict
     created_utc: str
