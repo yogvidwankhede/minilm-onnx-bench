@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minilm-onnx-bench"
+version = "0.1.0"
+description = "Export a fine-tuned MiniLM sentence embedder to ONNX and benchmark ONNX Runtime against PyTorch"
+requires-python = ">=3.10"
+authors = [{ name = "Yogvid Wankhede" }]
+license = { text = "Apache-2.0" }
+dependencies = [
+  "torch>=2.2",
+  "transformers>=4.40,<5",
+  "onnx>=1.16",
+  "onnxruntime>=1.18",
+  "numpy",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "matplotlib"]
+
+[project.scripts]
+minilm-onnx = "minilm_onnx.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning", "ignore::FutureWarning"]
