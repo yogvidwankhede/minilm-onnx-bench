@@ -1,7 +1,11 @@
 __pycache__/
+build/
+dist/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
 artifacts/
+bundles/
 smoke/
 smoke_art/
 *.onnx

@@ -1,0 +1,11 @@
+# Only the lock file, package source and the chosen bundle go into the image.
+*
+!requirements/serve.lock
+!pyproject.toml
+!README.md
+!src/
+!bundles/*/manifest.json
+!bundles/*/model.onnx
+!bundles/*/tokenizer.json
+!bundles/*/golden.json
+**/__pycache__

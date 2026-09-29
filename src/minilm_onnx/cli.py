@@ -65,7 +65,9 @@ def parity_inputs(model_id: str, standin: bool, vocab: int):
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="minilm_onnx", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        prog="minilm_onnx", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--model", default=DEFAULT_MODEL_ID, help="HF id, local dir, or 'standin'")
     ap.add_argument("--out", default="results", help="output directory")
     ap.add_argument("--artifacts", default="artifacts", help="where ONNX files are written")
@@ -111,8 +113,10 @@ def main(argv=None) -> int:
         verdict = parity.check(r.name, {**m, "retrieval": None if standin else m["retrieval"]})
         par[r.name] = {**m, **verdict}
         flag = "PASS" if verdict["pass"] else "FAIL " + "; ".join(verdict["failures"])
-        print(f"  {r.name:<14} max|d|={m['max_abs_diff']:.2e}  min cos={m['min_cosine']:.6f}  "
-              f"top1={m['retrieval']['top1_agreement']:.2f}  {flag}")
+        print(
+            f"  {r.name:<14} max|d|={m['max_abs_diff']:.2e}  min cos={m['min_cosine']:.6f}  "
+            f"top1={m['retrieval']['top1_agreement']:.2f}  {flag}"
+        )
 
     print("[4/4] benchmarking")
     cfg = bench.BenchConfig(
@@ -137,7 +141,7 @@ def main(argv=None) -> int:
     }
     (out / "results.json").write_text(json.dumps(result, indent=2))
     write_markdown(result, out / "results.md")
-    print(f"\nwrote {out/'results.json'} and {out/'results.md'}")
+    print(f"\nwrote {out / 'results.json'} and {out / 'results.md'}")
     return 0 if all(v["pass"] for v in par.values()) else 1
 
 

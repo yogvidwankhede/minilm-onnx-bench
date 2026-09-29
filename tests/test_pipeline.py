@@ -76,25 +76,44 @@ def test_bootstrap_ci_brackets_point_estimate():
     base, fast = rng.normal(10, 0.5, 400), rng.normal(5, 0.25, 400)
     lo, hi = bench.bootstrap_speedup(base, fast, 1000, rng)
     assert lo < np.median(base) / np.median(fast) < hi
-    assert 1.8 < lo and hi < 2.2
+    assert lo > 1.8 and hi < 2.2
 
 
 def test_bench_and_report_end_to_end(tiny, exported, tmp_path):
     runners = [TorchRunner(tiny, 1), OrtRunner(exported["onnx_fp32_opt"], "onnx_fp32_opt", 1)]
-    cfg = bench.BenchConfig(batch_sizes=[1, 2], seq_lens=[8], warmup=1, min_iters=3, min_seconds=0.05,
-                            rounds=1, bootstrap=100)
+    cfg = bench.BenchConfig(
+        batch_sizes=[1, 2], seq_lens=[8], warmup=1, min_iters=3, min_seconds=0.05, rounds=1, bootstrap=100
+    )
     rows = bench.run(runners, cfg, vocab=2000, log=lambda *_: None)
     assert len(rows) == 4
     ort_row = next(r for r in rows if r["runtime"] == "onnx_fp32_opt")
     assert ort_row["p50_ms"] > 0 and len(ort_row["speedup_ci95"]) == 2
     res = {
-        "model": "tiny", "weights": "random-init stand-in", "parity_source": "synthetic",
+        "model": "tiny",
+        "weights": "random-init stand-in",
+        "parity_source": "synthetic",
         "architecture": {"layers": 2, "hidden": 64, "heads": 4, "params_m": 0.2},
-        "environment": {"platform": "x", "machine": "x", "cpu_count": 1, "threads": 1, "torch": "x",
-                        "onnxruntime": "x", "transformers": "x", "python": "x", "timestamp_utc": "x"},
+        "environment": {
+            "platform": "x",
+            "machine": "x",
+            "cpu_count": 1,
+            "threads": 1,
+            "torch": "x",
+            "onnxruntime": "x",
+            "transformers": "x",
+            "python": "x",
+            "timestamp_utc": "x",
+        },
         "sizes_mb": {"onnx_fp32": 1.0},
-        "parity": {"onnx_fp32_opt": {"max_abs_diff": 0.0, "min_cosine": 1.0, "pass": True, "failures": [],
-                                     "retrieval": {"top1_agreement": 1.0, "top5_overlap": 1.0}}},
+        "parity": {
+            "onnx_fp32_opt": {
+                "max_abs_diff": 0.0,
+                "min_cosine": 1.0,
+                "pass": True,
+                "failures": [],
+                "retrieval": {"top1_agreement": 1.0, "top5_overlap": 1.0},
+            }
+        },
         "benchmark": rows,
     }
     write_markdown(res, tmp_path / "r.md")

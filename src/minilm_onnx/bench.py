@@ -95,8 +95,6 @@ def run(runners: list, cfg: BenchConfig, vocab: int = 30522, baseline: str = "py
                     lo, hi = bootstrap_speedup(base, arr, cfg.bootstrap, rng)
                     row["speedup_ci95"] = [lo, hi]
                 rows.append(row)
-            cell = "  ".join(
-                f"{r.name}={np.median(lat[r.name]):.2f}ms" for r in runners
-            )
+            cell = "  ".join(f"{r.name}={np.median(lat[r.name]):.2f}ms" for r in runners)
             log(f"  batch={bs:<3} seq={seq:<4} {cell}")
     return rows

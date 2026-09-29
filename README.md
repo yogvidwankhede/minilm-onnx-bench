@@ -1,108 +1,197 @@
 # minilm-onnx-bench
 
-Export my fine-tuned sentence-embedding model
-[`yogvidwankhede/healthmate-minilm-l6-v2-medical-3fold`](https://huggingface.co/yogvidwankhede/healthmate-minilm-l6-v2-medical-3fold)
-(the retriever from [HealthMate-AI](https://github.com/yogvidwankhede/HealthMate-AI)) to ONNX, prove the export
-produces the same embeddings, and measure what ONNX Runtime buys over PyTorch on CPU.
+[![ci](https://github.com/yogvidwankhede/minilm-onnx-bench/actions/workflows/ci.yml/badge.svg)](https://github.com/yogvidwankhede/minilm-onnx-bench/actions/workflows/ci.yml)
 
-```
-PyTorch model ──► ONNX fp32 ──► ORT-fused fp32
-                     └────────► int8 (dynamic quantization)
-         │
-         ├─ parity:  element-wise, per-sentence cosine, retrieval ranking agreement
-         └─ bench:   p50/p95/p99 latency + throughput over batch × sequence length,
-                     speedup with 95% bootstrap CIs
+Production serving for my fine-tuned sentence-embedding model
+[`yogvidwankhede/healthmate-minilm-l6-v2-medical-3fold`](https://huggingface.co/yogvidwankhede/healthmate-minilm-l6-v2-medical-3fold),
+the retriever behind [HealthMate-AI](https://github.com/yogvidwankhede/HealthMate-AI).
+It covers the path from PyTorch checkpoint to a running service:
+
+- **Export** to ONNX with pooling and normalization inside the graph.
+- **Release gate:** a model bundle is only produced if ONNX Runtime matches PyTorch within tolerance.
+- **Bundles** are content-addressed over every file; the server re-verifies checksums at startup
+  and runs a golden-vector self-test before taking traffic.
+- **Inference service:** OpenAI-compatible API, token-budget dynamic batching, all-or-nothing load
+  shedding, request size limits, Prometheus metrics, JSON logs with no request text, a self-healing
+  failure model, graceful drain.
+- **Container:** no PyTorch in the image, non-root, readiness-based health check.
+- **CI:** lint, tests on Python 3.10 and 3.12, the release gate, and an image build plus container
+  smoke test.
+- **Benchmarks:** offline (ONNX Runtime vs PyTorch) and online (load test of batching policies,
+  repeated runs), with the method written down.
+
+```mermaid
+flowchart LR
+  subgraph build["Build time: python -m minilm_onnx.package"]
+    HF[PyTorch checkpoint] --> EX[ONNX export<br/>pool + normalize in graph]
+    EX --> Q[int8 dynamic quant]
+    Q --> G{parity gate<br/>vs PyTorch}
+    G -- fail --> X[no bundle]
+    G -- pass --> B[(bundle<br/>model, tokenizer,<br/>golden, manifest)]
+  end
+  subgraph serve["Serve time: python -m minilm_onnx.serving"]
+    B --> V[verify sha256<br/>+ golden self-test]
+    V --> R[ready]
+    C[clients] -->|/v1/embeddings| A[FastAPI<br/>validate, admit or 503]
+    A --> T[Rust tokenizer] --> QU[[bounded queue]]
+    QU --> BA[batcher<br/>sort by length,<br/>token budget] --> ORT[ONNX Runtime<br/>worker thread]
+    ORT --> A
+  end
 ```
 
 ## Quick start
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu   # CPU wheel
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e ".[dev]"
 
-make test            # 14 offline tests (tiny model, ~10 s)
-make bench           # real fine-tuned weights from the Hugging Face Hub
-make bench-standin   # same architecture, random weights: speed only, no network
+make test                        # 55 tests, offline, about 15 s
+make bundle MODEL=standin        # gated bundle from a same-architecture stand-in (no network)
+make bundle                      # gated bundle from the real fine-tuned weights (Hugging Face)
+make serve BUNDLE=bundles/<name> # http://localhost:8080
 ```
 
-Each run writes `results/<name>/results.json` (everything, machine-readable), `results.md` (tables) and
-`latency.png`. The command exits non-zero if any ONNX variant fails its parity gate.
+```bash
+curl -s localhost:8080/v1/embeddings -H 'content-type: application/json' \
+  -d '{"input": ["chest pain radiating to the left arm", "metformin side effects"]}'
+```
 
-## Design decisions
+Because the API matches OpenAI's embeddings endpoint, existing clients work unchanged:
 
-**Pooling and normalization live inside the ONNX graph.** The model's `modules.json` is
-Transformer → mean pooling → L2 normalize. Exporting only the encoder would leave every consumer to
-reimplement masked mean pooling, which is the easiest place to silently diverge (forgetting the padding mask
-changes every embedding). The exported graph takes `input_ids`, `attention_mask`, `token_type_ids` and returns
-the final 384-d unit vector.
+```python
+from openai import OpenAI
 
-**Dynamic batch and sequence axes, verified on shapes the trace never saw.** The export traces a (2, 16)
-input with one padded row, so masking is traced rather than constant-folded. Tests then check parity at
-(1, 5), (3, 40) and (7, 128).
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="unused")
+vec = client.embeddings.create(model="healthmate-minilm", input="shortness of breath").data[0].embedding
+```
 
-**Parity is gated at three levels.** fp32 variants must match PyTorch to max |Δ| ≤ 1e-4 and cosine ≥ 0.99999.
-int8 is lossy by design, so it gets a task-level gate instead: cosine ≥ 0.98 and top-1 retrieval agreement
-≥ 0.90 on a 15-query × 40-document set (`src/minilm_onnx/corpus.py`, written for this repo; it checks ranking
-stability, it is not a quality benchmark).
+Container:
 
-**Fair timing.** Same input arrays for every runtime, tokenization excluded, the same thread count for
-PyTorch (`torch.set_num_threads`) and ORT (`intra_op_num_threads`), warmup calls, and runtimes interleaved
-across rounds within each cell so machine drift hits all of them. Speedup is a ratio of medians with a
-percentile-bootstrap 95% CI, so a "1.1x" that overlaps 1.0 reads as no difference.
+```bash
+docker build --build-arg BUNDLE=bundles/<name> -t minilm-embed .
+docker run -p 8080:8080 -e EMBED_INTRA_OP_THREADS=2 minilm-embed
+```
 
-## Results so far: architecture stand-in, 2 vCPUs
+## Results
 
-The workspace this was built in could not download the weights, so the committed run uses a **randomly
-initialized model with the identical architecture** (6 layers, hidden 384, 12 heads, 22.6M params). Latency
-depends on architecture and shapes, not weight values, so the speed numbers transfer; the parity numbers here
-only show the export mechanism is exact, not how int8 affects this model's retrieval.
-Full tables: [`results/standin/results.md`](results/standin/results.md).
+All numbers so far come from a **randomly initialized model with the identical architecture**
+(6 layers, hidden 384, 22.6M params); the workspace this was built in couldn't download the
+fine-tuned weights.
 
-![latency](results/standin/latency.png)
+- **What transfers:** offline latency. It depends on architecture and input shapes, not weight
+  values.
+- **What doesn't:** retrieval fidelity under int8. The release gate checks that on the real weights
+  when `make bundle` runs.
+- **Partly:** the online load test tokenized with a small stand-in vocabulary trained on the test
+  corpus, so its sequence lengths only approximate the real 30,522-token vocabulary's.
 
-| Variant | Size | Speedup vs PyTorch (range over 9 batch × seq cells) |
+Hardware: a 2-vCPU KVM guest with AVX-512 VNNI. The guest reports one thread per core, but the
+host's mapping is unknown, so "separate cores" may share a physical core.
+
+### Offline: ONNX Runtime vs PyTorch
+
+| Variant | Size | Speedup vs PyTorch eager (range over 9 batch × sequence cells) |
 |---|---:|---|
-| ONNX fp32, no graph opts | 90.3 MB | 0.93x – 2.43x |
-| ONNX fp32, ORT-fused graph | 90.2 MB | 1.11x – 2.68x |
-| ONNX int8, dynamic quant | 58.5 MB | 1.96x – 4.73x |
+| ONNX fp32, ORT-fused | 90.2 MB | 1.11x – 2.68x |
+| ONNX int8, dynamic quantization | 58.5 MB | 1.96x – 4.73x |
 
-What the numbers say, with the caveats a reviewer would raise:
+- The biggest fp32 gain is at batch 1 with short inputs, where eager-mode dispatch overhead
+  dominates.
+- **Unfused** fp32 ONNX was no faster than PyTorch at batch 32 in two cells: 0.93x at seq 128, and
+  0.98x at seq 32, whose CI straddles 1.
+- int8 is only 35% smaller because the token-embedding table isn't quantized.
+- int8 gains lean on the CPU's VNNI support.
 
-- **The biggest fp32 win is at batch 1, short input (~2.5x)**, where PyTorch eager's per-op Python/dispatch
-  overhead dominates. At large batches the work is GEMM-bound and fp32 ONNX gains shrink to ~1.1–1.8x.
-  Unfused ONNX was *slower* than PyTorch at batch 32 × seq 128 (0.93x, CI [0.88, 0.96]).
-- **int8 roughly halves latency everywhere** (≥1.96x in every cell) with embeddings at cosine ≥ 0.99995 to
-  fp32 on the stand-in. Whether retrieval survives quantization on the *fine-tuned* weights is exactly what
-  the real run's gate checks.
-- **int8 is only 35% smaller, not 75%.** Dynamic quantization targets MatMul/Gemm; the 30,522 × 384 token
-  embedding table (~47 MB) stays fp32.
-- This is a shared 2-vCPU cloud sandbox, so tails are noisy (see p95 columns). Rerun on the machine you
-  actually serve from before quoting numbers.
+Details: [`results/standin/results.md`](results/standin/results.md) · [ADR 0003](docs/adr/0003-int8-dynamic-quantization.md)
 
-## Results: fine-tuned weights
+### Online: dynamic batching
 
-_Pending: `make bench` on a machine with Hugging Face access writes `results/healthmate/`._
+int8, server pinned to one vCPU, load generator on the other, single-text requests; median of 3
+interleaved repetitions, with shaded min–max bands.
+
+![load test](results/serving/loadtest.png)
+
+| Policy | c=1 p50 | c=16 req/s · p50 | c=64 req/s · p50 |
+|---|---:|---:|---:|
+| No batching | 7.6 ms | 151 · 104 ms | 144 · 442 ms |
+| **Batching, wait 0 ms (default)** | 7.7 ms | 222 · 69 ms | 220 · 279 ms |
+| Batching, wait 5 ms | 13.0 ms | 210 · 71 ms | 196 · 321 ms |
+
+Batching raises throughput 47–53% under load and cuts median latency by a third or more, with
+non-overlapping ranges across repetitions. It costs nothing when idle as long as it doesn't *wait*:
+requests that arrive while the model is busy form the next batch by themselves. Whether a 2 ms wait
+beats 0 ms under heavy load is inside the noise; see [ADR 0004](docs/adr/0004-dynamic-batching.md).
+Full table: [`results/serving/loadtest.md`](results/serving/loadtest.md).
+
+### Measuring it honestly
+
+The first load test said batching *collapses* at 64 concurrent clients. Before changing any code I
+checked where the time went:
+
+1. Pinned server and load generator to separate vCPUs. The collapse remained.
+2. Compared a cold server with one that had already run lower load levels. Both collapsed, so it
+   wasn't accumulated state.
+3. Profiled the server (py-spy). Neither the ORT thread nor the event loop was saturated.
+4. Compared server-side request time (from `/metrics`) with client-side latency. They disagreed by
+   about 8x.
+5. Swapped the load generator's HTTP client.
+
+Same server, same load, only the client changed ([`results/serving/client_comparison.md`](results/serving/client_comparison.md),
+median of 2 runs):
+
+| Client, 64 connections | Req/s | Client p99 | Server-side time per request |
+|---|---:|---:|---:|
+| httpx | 81 | 3,146 ms | 64 ms |
+| aiohttp | 194 | 482 ms | 297 ms |
+
+The service was fine. httpx's async connection pool was the bottleneck under bursty responses, which
+is exactly the pattern batching produces; at 16 connections both clients agree. The load test now
+uses aiohttp, pins CPUs, repeats runs, and reports the server's own view next to the client's, so a
+disagreement between them is visible instead of silently wrong. `--client httpx` reproduces the
+problem.
+
+## Operating it
+
+- [Runbook](docs/runbook.md): endpoints, configuration, metrics, PromQL alerts, symptoms and actions,
+  deploy/rollback, shutdown sequence, capacity planning.
+- Architecture decisions:
+  [0001 ONNX Runtime on CPU](docs/adr/0001-onnx-runtime-cpu.md) ·
+  [0002 gated bundles](docs/adr/0002-gated-model-bundles.md) ·
+  [0003 int8 and its batch dependence](docs/adr/0003-int8-dynamic-quantization.md) ·
+  [0004 dynamic batching](docs/adr/0004-dynamic-batching.md) ·
+  [0005 process model and packaging](docs/adr/0005-process-and-packaging.md)
+
+## What is verified where
+
+| Claim | Verified by |
+|---|---|
+| Export parity, dynamic shapes, padding invariance | `tests/test_pipeline.py` |
+| Gate blocks bad bundles; tampered, mismatched or tokenizer-drifted bundles never become ready | `tests/test_serving.py` |
+| Batching preserves order; fp32 is batch-invariant; int8 drift exists and is bounded | `tests/test_serving.py` · `results/serving/batch_drift.json` |
+| Load shedding is all-or-nothing; timeouts and cancellations release work; a dead batcher fails fast and turns liveness red | `tests/test_serving.py` |
+| API shape, validation, size limits, request-id sanitizing, error shapes, metrics | `tests/test_serving.py` |
+| Serving runs with no PyTorch installed | clean-virtualenv run during development; CI `image` job |
+| Docker image builds, is non-root, reads its bundle, becomes healthy, serves, drains | CI `image` job (container registries were blocked in the build workspace, so CI is its first build) |
+| Real fine-tuned weights pass the gate | **pending**: `make bundle` on a machine with Hugging Face access |
 
 ## Layout
 
 ```
 src/minilm_onnx/
-  model.py      SentenceEmbedder (encoder + mean pool + normalize), loaders, stand-in builder
-  export.py     torch.onnx.export, ORT graph fusion, int8 dynamic quantization
-  runtimes.py   PyTorch / ORT runners behind one call signature; synthetic batches
-  parity.py     element-wise, cosine and retrieval-agreement checks with gates
-  bench.py      timing loop, interleaved rounds, bootstrap speedup CIs
-  report.py     results.md + latency.png
-  cli.py        export → parity → bench → report
-tests/          offline tests on a 2-layer model: pooling, padding invariance, dynamic-shape parity,
-                int8 tolerance, bootstrap CI, end-to-end report
+  model.py export.py parity.py      export + parity (build time, needs torch)
+  package.py                        gated bundle builder
+  bench.py runtimes.py report.py    offline ONNX Runtime vs PyTorch benchmark
+  serving/                          runtime, no torch
+    bundle.py      manifest, checksums, content-addressed version, golden set
+    tokenize.py    Rust tokenizer + padding (shared with the packager)
+    engine.py      admission, token-budget batcher, ORT worker, cache, failure handling, drain
+    app.py         HTTP API, limits, errors, request ids, metrics endpoint
+    config.py metrics.py logs.py __main__.py
+tools/            load test, load-test runner, batch-drift measurement, report/chart
+docs/             runbook, ADRs
+requirements/     pinned serving lock file used by the Dockerfile (Python 3.11+)
 ```
-
-## Not covered (yet)
-
-GPU execution providers, static (calibrated) int8, quantizing the embedding table, and end-to-end latency
-including tokenization. Each would be a separate, clearly labelled column rather than a change to these.
 
 ## License
 
-Apache-2.0, matching the model.
+Apache-2.0 (see [LICENSE](LICENSE)), matching the model.

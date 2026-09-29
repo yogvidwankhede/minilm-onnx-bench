@@ -40,11 +40,13 @@ def retrieval_agreement(ref_q, ref_d, got_q, got_d, k: int = 5) -> dict:
     got_rank = np.argsort(-got_scores, axis=1)
     k = min(k, ref_d.shape[0])
     top1 = float((ref_rank[:, 0] == got_rank[:, 0]).mean())
-    overlap = float(
-        np.mean([len(set(r[:k]) & set(g[:k])) / k for r, g in zip(ref_rank, got_rank)])
-    )
-    return {"top1_agreement": top1, f"top{k}_overlap": overlap, "n_queries": int(ref_q.shape[0]),
-            "n_docs": int(ref_d.shape[0])}
+    overlap = float(np.mean([len(set(r[:k]) & set(g[:k])) / k for r, g in zip(ref_rank, got_rank)]))
+    return {
+        "top1_agreement": top1,
+        f"top{k}_overlap": overlap,
+        "n_queries": int(ref_q.shape[0]),
+        "n_docs": int(ref_d.shape[0]),
+    }
 
 
 def check(name: str, metrics: dict) -> dict:

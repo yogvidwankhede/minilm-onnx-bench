@@ -5,23 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "minilm-onnx-bench"
 version = "0.1.0"
-description = "Export a fine-tuned MiniLM sentence embedder to ONNX and benchmark ONNX Runtime against PyTorch"
+description = "Production serving for a fine-tuned MiniLM embedder: gated ONNX bundles, dynamic-batching service, benchmarks"
 requires-python = ">=3.10"
 authors = [{ name = "Yogvid Wankhede" }]
 license = { text = "Apache-2.0" }
+# Runtime core: everything the serving path imports. No torch.
 dependencies = [
-  "torch>=2.2",
-  "transformers>=4.40,<5",
-  "onnx>=1.16",
+  "numpy>=1.26",
   "onnxruntime>=1.18",
-  "numpy",
+  "tokenizers>=0.19",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "matplotlib"]
+serve = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "prometheus-client>=0.20", "orjson>=3.9"]
+build = ["torch>=2.2", "transformers>=4.40,<5", "onnx>=1.16"]
+dev = ["minilm-onnx-bench[serve,build]", "pytest>=8", "httpx>=0.27", "ruff==0.15.11", "matplotlib", "aiohttp>=3.9"]
 
 [project.scripts]
-minilm-onnx = "minilm_onnx.cli:main"
+minilm-onnx-bench = "minilm_onnx.cli:main"
+minilm-onnx-package = "minilm_onnx.package:main"
+minilm-onnx-serve = "minilm_onnx.serving.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -30,3 +33,11 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning", "ignore::FutureWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "ASYNC"]
+ignore = ["B905"]  # zip(strict=) would add noise; lengths are equal by construction

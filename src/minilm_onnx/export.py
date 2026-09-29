@@ -99,7 +99,7 @@ def quantize_int8(src: Path, dst: Path) -> Path:
             quant_pre_process(str(src), str(prepped), skip_optimization=False, skip_symbolic_shape=True)
         src = prepped
     except Exception as exc:  # pre-processing is an improvement, not a requirement
-        warnings.warn(f"quant_pre_process skipped: {exc}")
+        warnings.warn(f"quant_pre_process skipped: {exc}", stacklevel=2)
     quantize_dynamic(
         model_input=str(src),
         model_output=str(dst),
@@ -110,10 +110,14 @@ def quantize_int8(src: Path, dst: Path) -> Path:
     return dst
 
 
-def export_all(model: SentenceEmbedder, out_dir: Path, opset: int = 17, int8: bool = True) -> dict[str, Path]:
+def export_all(
+    model: SentenceEmbedder, out_dir: Path, opset: int = 17, int8: bool = True, fused: bool = True
+) -> dict[str, Path]:
+    """fused=False skips writing the ORT-fused graph (bundles ship the plain graph; ADR 0001)."""
     out_dir = Path(out_dir)
     paths = {"onnx_fp32": export_fp32(model, out_dir / "model.onnx", opset)}
-    paths["onnx_fp32_opt"] = optimize(paths["onnx_fp32"], out_dir / "model.opt.onnx")
+    if fused:
+        paths["onnx_fp32_opt"] = optimize(paths["onnx_fp32"], out_dir / "model.opt.onnx")
     if int8:
         # Quantize the un-fused graph: dynamic quant of ORT-fused (contrib-op)
         # graphs is less reliable across ORT versions.

@@ -1,0 +1,20 @@
+[
+  {
+    "bundle": "fp32-78f48b6f9912",
+    "variant": "fp32",
+    "weights": "random-init stand-in (same architecture)",
+    "n_texts": 55,
+    "min_cosine_alone_vs_batched": 0.9999994039535522,
+    "mean_cosine_alone_vs_batched": 1.0,
+    "max_abs_diff": 4.470348358154297e-08
+  },
+  {
+    "bundle": "int8-4b4ccf66896b",
+    "variant": "int8",
+    "weights": "random-init stand-in (same architecture)",
+    "n_texts": 55,
+    "min_cosine_alone_vs_batched": 0.999982476234436,
+    "mean_cosine_alone_vs_batched": 0.9999914169311523,
+    "max_abs_diff": 0.0010364297777414322
+  }
+]
